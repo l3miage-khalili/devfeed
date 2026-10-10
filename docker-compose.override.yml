@@ -1,0 +1,121 @@
+# ============================================================
+#  docker-compose.override.yml — Dev
+#  Chargé automatiquement par : docker compose up
+#  Ajoute : ports exposés, outils dev, hot reload, debug JVM
+# ============================================================
+
+services:
+
+  # ── Backend : ports + debug JVM ─────────────────────────
+  backend:
+    ports:
+      - "8080:8080"   # API REST
+      - "5005:5005"   # Remote debug (IntelliJ / VSCode)
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      JAVA_TOOL_OPTIONS: >-
+        -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005
+
+  # ── Frontend Angular (dev server) ───────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "4200:4200"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules    # volume anonyme : protège node_modules du bind mount
+    environment:
+      - CHOKIDAR_USEPOLLING=true   # file watching fiable sous WSL / Docker Desktop
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - devfeed-network
+
+  # ── PostgreSQL : port exposé pour SQLTools / DataGrip ───
+  postgres:
+    ports:
+      - "5432:5432"
+
+  # ── Redis : port exposé pour redis-cli / RedisInsight ───
+  redis:
+    ports:
+      - "6379:6379"
+
+  # ── PgAdmin ─────────────────────────────────────────────
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - devfeed-network
+
+  # ── SonarQube ────────────────────────────────────────────
+  # Prérequis Linux : sudo sysctl -w vm.max_map_count=262144
+  sonarqube:
+    image: sonarqube:lts-community
+    environment:
+      SONAR_JDBC_URL: jdbc:postgresql://postgres:5432/sonarqube
+      SONAR_JDBC_USERNAME: ${POSTGRES_USER}
+      SONAR_JDBC_PASSWORD: ${POSTGRES_PASSWORD}
+      SONAR_WEB_JAVAOPTS: "-Xmx512m -Xms128m"
+      SONAR_CE_JAVAOPTS:  "-Xmx512m -Xms128m"
+    ports:
+      - "9000:9000"
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - devfeed-network
+
+  # ── Prometheus ───────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - devfeed-network
+
+  # ── Grafana ──────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - devfeed-network

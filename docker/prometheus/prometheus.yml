@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 15s       # fréquence de collecte des métriques
+  evaluation_interval: 15s   # fréquence d'évaluation des règles d'alerte
+
+scrape_configs:
+
+  # Spring Boot Actuator — métriques applicatives DevFeed
+  - job_name: 'devfeed-backend'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['backend:8080']
+
+  # Prometheus lui-même (optionnel — utile pour déboguer)
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

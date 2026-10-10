@@ -1,0 +1,82 @@
+# ============================================================
+#  docker-compose.yml — Base (commun à tous les environnements)
+#  Usage dev  : docker compose up
+#  Usage prod : docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# ============================================================
+
+services:
+
+  # ── Backend Spring Boot ──────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: devfeed-backend:latest
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/devfeed
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION_MS: ${JWT_EXPIRATION_MS:-86400000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s   # laisse le temps à la JVM de démarrer
+    networks:
+      - devfeed-network
+
+  # ── PostgreSQL ───────────────────────────────────────────
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: devfeed
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro  # crée la base sonarqube
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d devfeed"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - devfeed-network
+
+  # ── Redis ────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    command: >
+      redis-server
+      ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - devfeed-network
+
+# ── Réseau interne ───────────────────────────────────────────
+networks:
+  devfeed-network:
+    driver: bridge
+
+# ── Volumes nommés (déclarés ici pour les 3 environnements) ──
+volumes:
+  postgres_data:
+  sonarqube_data:
+  sonarqube_extensions:
+  prometheus_data:
+  grafana_data:
+  pgadmin_data:

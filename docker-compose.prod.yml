@@ -1,0 +1,111 @@
+# ============================================================
+#  docker-compose.prod.yml — Production
+#  Usage : docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#  Images tirées de GitHub Container Registry (ghcr.io)
+#  Seuls les ports 80 et 443 sont exposés publiquement (via Nginx)
+#  Accès aux services internes : SSH tunneling uniquement
+# ============================================================
+
+services:
+
+  # ── Backend Spring Boot ──────────────────────────────────
+  backend:
+    image: ghcr.io/${GITHUB_USERNAME}/devfeed-backend:${IMAGE_TAG:-latest}
+    restart: always
+    build: !reset null   # désactive le build local — on utilise l'image du registry
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/devfeed
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION_MS: ${JWT_EXPIRATION_MS:-86400000}
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # ── PostgreSQL ───────────────────────────────────────────
+  postgres:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  # ── Redis ────────────────────────────────────────────────
+  redis:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+  # ── Nginx — reverse proxy + serveur Angular ──────────────
+  # L'image contient les fichiers Angular compilés (multi-stage Dockerfile)
+  # et la configuration Nginx pour le reverse proxy vers le backend
+  nginx:
+    image: ghcr.io/${GITHUB_USERNAME}/devfeed-frontend:${IMAGE_TAG:-latest}
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro   # certificats SSL générés par Certbot
+    depends_on:
+      backend:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+    networks:
+      - devfeed-network
+
+  # ── Prometheus (accès via SSH tunnel uniquement) ─────────
+  # ssh -L 9090:localhost:9090 user@vps-ip
+  prometheus:
+    image: prom/prometheus:latest
+    restart: always
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+    depends_on:
+      backend:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    networks:
+      - devfeed-network
+
+  # ── Grafana (accès via SSH tunnel uniquement) ────────────
+  # ssh -L 3000:localhost:3000 user@vps-ip
+  grafana:
+    image: grafana/grafana:latest
+    restart: always
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+    networks:
+      - devfeed-network
